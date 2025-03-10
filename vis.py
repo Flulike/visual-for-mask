@@ -5,6 +5,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from matplotlib.patches import Arrow
+from PIL import Image, ImageDraw
+
 from einops import rearrange
 import torchvision.transforms as transforms
 # from DCNv2_latest.dcn_v2 import DCNv2
@@ -75,6 +80,13 @@ def batch_index_select(x, idx):
         offset = torch.arange(B, dtype=torch.long, device=x.device).view(B, 1) * N
         idx = idx + offset
         out = x.reshape(B*N)[idx.reshape(-1)].reshape(B, N_new)
+        return out
+    elif len(x.size()) == 4:
+        B, C, H, W = x.size()
+        N_new = idx.size(1)
+        offset = torch.arange(B, dtype=torch.long, device=x.device).view(B, 1, 1, 1) * H * W
+        idx = idx.view(B, N_new, 1, 1) + offset
+        out = x.view(B * H * W, C)[idx.view(-1)].view(B, N_new, C, H, W)
         return out
     else:
         raise NotImplementedError
@@ -407,41 +419,58 @@ class OSR(nn.Module):
         x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), 'reflect')
         return x
 
-# def visual(x,mask):
+# def visual(x, mask):
 #     _, _, h, w = x.size()
 #     wsize = 16
-#     i=16
 #     mod_pad_h = (wsize - h % wsize) % wsize
 #     mod_pad_w = (wsize - w % wsize) % wsize
 #     x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), 'reflect')
 
-#     res = x
-#     mean_y = x*0
-
-
-#     B,C,H,W = x.shape
+#     B, C, H, W = x.shape
 #     origin_x = x
-#     x = rearrange(x,'b c (h dh) (w dw) -> b (h w) (dh dw c)', dh=wsize, dw=wsize)
+#     x = rearrange(x, 'b c (h dh) (w dw) -> b (h w) (dh dw c)', dh=wsize, dw=wsize)
 #     x_input = x
-#     print(x.shape)
-#     p =  len(mask)
-#     for i in range(p):
-#         # i=18
-#         idx1,idx2 = mask[i][0]
+
+#     # 定义颜色和透明度
+#     alpha = 0.5  # 透明度控制，值越小越透明
+#     light_red = torch.tensor([1.0, 0.8, 0.8], device=x.device)    # 浅红色
+#     light_green = torch.tensor([0.8, 1.0, 0.8], device=x.device) # 浅绿色
+
+#     # 创建窗口颜色模板
+#     window_pixels_red = light_red.repeat(wsize*wsize).view(1, 1, -1)
+#     window_pixels_green = light_green.repeat(wsize*wsize).view(1, 1, -1)
+
+#     for i in range(len(mask)):
+#         idx1, idx2 = mask[i][0]
 #         offset = mask[i][1]
-#         x1,x2 = batch_index_select(x_input,idx1), batch_index_select(x_input,idx2)
-#         print(x1.shape[1],x_input.shape[1])
-#         x2 = x2*0.1 + 0.9
-#         x1 = x1*1.0
-#         x = batch_index_fill(x_input.clone(), x1, x2, idx1, idx2)
-#         x = rearrange(x,'b (h w) (dh dw c) -> b c (h dh) (w dw)', h=H//wsize, w=W//wsize, dh=wsize, dw=wsize, c = C)
+        
+#         # 获取要处理的窗口
+#         x1 = batch_index_select(x_input, idx1)
+#         x2 = batch_index_select(x_input, idx2)
 
-#         x_warp = flow_warp(origin_x, offset.permute(0,2,3,1), interp_mode='bilinear', padding_mode='border')
-#         # x = torch.max(x,res)
+#         # 对非mask区域应用浅lv色（保持原内容+颜色叠加）
+#         x1 = x1 * (1 - alpha) + window_pixels_green * alpha
+#         # 对mask区域应用浅绿色（保持原内容+颜色叠加）
+#         x2 = x2 * (1 - alpha) + window_pixels_red * alpha
 
-#         img1 = transforms.ToPILImage()(x.squeeze(0))
-#         # img1.show()
-#         img1.save('temp{}.png'.format(i))
+#         # 创建带颜色叠加的新特征图
+#         x_colored = batch_index_fill(x_input.clone(), x1, x2, idx1, idx2)
+
+#         # 恢复空间布局
+#         x_vis = rearrange(x_colored, 'b (h w) (dh dw c) -> b c (h dh) (w dw)', 
+#                         h=H//wsize, w=W//wsize, dh=wsize, dw=wsize, c=C)
+
+#         # 可选的warp操作
+#         x_warp = flow_warp(origin_x, offset.permute(0,2,3,1), 
+#                           interp_mode='bilinear', padding_mode='border')
+
+#         # 保存结果
+#         img = torch.clamp(x_vis, 0, 1).squeeze(0)
+#         img = transforms.ToPILImage()(img)
+#         img.save(f'temp{i}.png')
+
+from PIL import ImageDraw, Image
+import math
 
 def visual(x, mask):
     _, _, h, w = x.size()
@@ -455,44 +484,82 @@ def visual(x, mask):
     x = rearrange(x, 'b c (h dh) (w dw) -> b (h w) (dh dw c)', dh=wsize, dw=wsize)
     x_input = x
 
-    # 定义颜色和透明度
-    alpha = 0.5  # 透明度控制，值越小越透明
-    light_red = torch.tensor([1.0, 0.8, 0.8], device=x.device)    # 浅红色
-    light_green = torch.tensor([0.8, 1.0, 0.8], device=x.device) # 浅绿色
-
-    # 创建窗口颜色模板
+    # 颜色参数保持不变
+    alpha = 0.5
+    light_red = torch.tensor([1.0, 0.8, 0.8], device=x.device)
+    light_green = torch.tensor([0.8, 1.0, 0.8], device=x.device)
     window_pixels_red = light_red.repeat(wsize*wsize).view(1, 1, -1)
     window_pixels_green = light_green.repeat(wsize*wsize).view(1, 1, -1)
 
     for i in range(len(mask)):
         idx1, idx2 = mask[i][0]
         offset = mask[i][1]
-        
-        # 获取要处理的窗口
+
+        # 颜色处理部分保持不变
         x1 = batch_index_select(x_input, idx1)
         x2 = batch_index_select(x_input, idx2)
-
-        # 对非mask区域应用浅lv色（保持原内容+颜色叠加）
-        x1 = x1 * (1 - alpha) + window_pixels_green * alpha
-        # 对mask区域应用浅绿色（保持原内容+颜色叠加）
-        x2 = x2 * (1 - alpha) + window_pixels_red * alpha
-
-        # 创建带颜色叠加的新特征图
+        # x1 = x1 * (1 - alpha) + window_pixels_green * alpha
+        # x2 = x2 * (1 - alpha) + window_pixels_red * alpha
         x_colored = batch_index_fill(x_input.clone(), x1, x2, idx1, idx2)
-
-        # 恢复空间布局
         x_vis = rearrange(x_colored, 'b (h w) (dh dw c) -> b c (h dh) (w dw)', 
                         h=H//wsize, w=W//wsize, dh=wsize, dw=wsize, c=C)
 
-        # 可选的warp操作
-        x_warp = flow_warp(origin_x, offset.permute(0,2,3,1), 
-                          interp_mode='bilinear', padding_mode='border')
-
-        # 保存结果
+        # 创建PIL图像
         img = torch.clamp(x_vis, 0, 1).squeeze(0)
-        img = transforms.ToPILImage()(img)
-        img.save(f'temp{i}.png')
+        img = transforms.ToPILImage()(img).convert("RGBA")
+        draw = ImageDraw.Draw(img)
 
+        # ==== 箭头参数优化 ====
+        scale_factor = 2.0    # 缩小箭头长度（原4→2）
+        arrow_size = 2        # 缩小箭头头部（原3→2）
+        stride = 2            # 步长控制密度（每2个窗口绘制一个）
+        min_length = 0.5      # 最小显示长度阈值（单位：像素）
+        max_length = 5       # 最大显示长度阈值（单位：像素）
+        arrow_color = (255, 80, 80, 220)  # 改用橙红色提高对比度
+
+        # 处理offset张量
+        offset_np = offset.squeeze(0).cpu().detach().numpy()
+        _, oh, ow = offset_np.shape
+
+        # 带步长的遍历
+        for y in range(0, oh, stride):
+            for x in range(0, ow, stride):
+                # 计算原始窗口中心坐标
+                center_x = x * (W//ow) + (W//ow)//2
+                center_y = y * (H//oh) + (H//oh)//2
+
+                # 获取当前offset值
+                dx = offset_np[0, y, x] * scale_factor
+                dy = offset_np[1, y, x] * scale_factor
+                displacement = math.hypot(dx, dy)
+
+                # 过滤微小位移
+                if displacement < min_length or displacement > max_length:
+                    continue
+
+                # 计算终点坐标
+                end_x = center_x + dx
+                end_y = center_y + dy
+
+                # 动态调整线宽和头部大小
+                line_width = max(1, int(displacement * 0.3))
+                head_size = max(1, int(displacement * 0.5))
+
+                # 绘制箭头主体
+                draw.line([(center_x, center_y), (end_x, end_y)], 
+                         fill=arrow_color, width=line_width)
+
+                # 绘制箭头头部（仅当位移足够大时）
+                if displacement > 2:  # 头部显示阈值
+                    angle = math.atan2(dy, dx)
+                    p1 = (end_x - head_size * math.cos(angle - math.pi/6),
+                          end_y - head_size * math.sin(angle - math.pi/6))
+                    p2 = (end_x - head_size * math.cos(angle + math.pi/6),
+                          end_y - head_size * math.sin(angle + math.pi/6))
+                    draw.polygon([(end_x, end_y), p1, p2], fill=arrow_color)
+
+        # 保存优化后的图像
+        img.save(f'temp{i}.png')
 
 
 if __name__ == '__main__':
@@ -502,7 +569,7 @@ if __name__ == '__main__':
     f.eval()
 
     #img = Image.open(r'10.160.15.241C04130-20220511050846_0001.png').convert('RGB')
-    img = Image.open(r'239.197.43.37-6310_20220510070000_0009_1.jpg').convert('RGB')
+    img = Image.open(r'photos/10.240.8.12C00061-20220519063947_0002/10.240.8.12C00061-20220519063947_0002.jpg').convert('RGB')
 
     
     x = transforms.ToTensor()(img)  
@@ -513,5 +580,3 @@ if __name__ == '__main__':
     # img1.show()
     img1.save('SR.png')
     visual(x,mask)
-
-        
