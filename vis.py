@@ -469,97 +469,253 @@ class OSR(nn.Module):
 #         img = transforms.ToPILImage()(img)
 #         img.save(f'temp{i}.png')
 
-from PIL import ImageDraw, Image
-import math
+# def visual(x, mask):
+#     _, _, h, w = x.size()
+#     wsize = 16
+#     mod_pad_h = (wsize - h % wsize) % wsize
+#     mod_pad_w = (wsize - w % wsize) % wsize
+#     x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), 'reflect')
+
+#     B, C, H, W = x.shape
+#     origin_x = x
+#     x = rearrange(x, 'b c (h dh) (w dw) -> b (h w) (dh dw c)', dh=wsize, dw=wsize)
+#     x_input = x
+
+#     # 颜色参数保持不变
+#     alpha = 0.5
+#     light_red = torch.tensor([1.0, 0.8, 0.8], device=x.device)
+#     light_green = torch.tensor([0.8, 1.0, 0.8], device=x.device)
+#     window_pixels_red = light_red.repeat(wsize*wsize).view(1, 1, -1)
+#     window_pixels_green = light_green.repeat(wsize*wsize).view(1, 1, -1)
+
+#     for i in range(len(mask)):
+#         idx1, idx2 = mask[i][0]
+#         offset = mask[i][1]
+
+#         # 颜色处理部分保持不变
+#         x1 = batch_index_select(x_input, idx1)
+#         x2 = batch_index_select(x_input, idx2)
+#         # x1 = x1 * (1 - alpha) + window_pixels_green * alpha
+#         # x2 = x2 * (1 - alpha) + window_pixels_red * alpha
+#         x_colored = batch_index_fill(x_input.clone(), x1, x2, idx1, idx2)
+#         x_vis = rearrange(x_colored, 'b (h w) (dh dw c) -> b c (h dh) (w dw)', 
+#                         h=H//wsize, w=W//wsize, dh=wsize, dw=wsize, c=C)
+
+#         # 创建PIL图像
+#         img = torch.clamp(x_vis, 0, 1).squeeze(0)
+#         img = transforms.ToPILImage()(img).convert("RGBA")
+#         draw = ImageDraw.Draw(img)
+
+#         # ==== 箭头参数优化 ====
+#         scale_factor = 4.0    # 缩小箭头长度（原4→2）
+#         arrow_size = 2        # 缩小箭头头部（原3→2）
+#         stride = 2            # 步长控制密度（每2个窗口绘制一个）
+#         min_length = 0.5      # 最小显示长度阈值（单位：像素）
+#         max_length = 5       # 最大显示长度阈值（单位：像素）
+#         arrow_color = (255, 80, 80, 220)  # 改用橙红色提高对比度
+
+#         # 处理offset张量
+#         offset_np = offset.squeeze(0).cpu().detach().numpy()
+#         _, oh, ow = offset_np.shape
+
+#         # 带步长的遍历
+#         for y in range(0, oh, stride):
+#             for x in range(0, ow, stride):
+#                 # 计算原始窗口中心坐标
+#                 center_x = x * (W//ow) + (W//ow)//2
+#                 center_y = y * (H//oh) + (H//oh)//2
+
+#                 # 获取当前offset值
+#                 dx = offset_np[0, y, x] * scale_factor
+#                 dy = offset_np[1, y, x] * scale_factor
+#                 displacement = math.hypot(dx, dy)
+
+#                 # 过滤微小位移
+#                 if displacement < min_length or displacement > max_length:
+#                     continue
+
+#                 # 计算终点坐标
+#                 end_x = center_x + dx
+#                 end_y = center_y + dy
+
+#                 # 动态调整线宽和头部大小
+#                 line_width = max(1, int(displacement * 0.3))
+#                 head_size = max(1, int(displacement))
+
+#                 # 绘制箭头主体
+#                 draw.line([(center_x, center_y), (end_x, end_y)], 
+#                          fill=arrow_color, width=line_width)
+
+#                 # 绘制箭头头部（仅当位移足够大时）
+#                 if displacement > 0.5:  # 头部显示阈值
+#                     angle = math.atan2(dy, dx)
+#                     p1 = (end_x - head_size * math.cos(angle - math.pi/6),
+#                           end_y - head_size * math.sin(angle - math.pi/6))
+#                     p2 = (end_x - head_size * math.cos(angle + math.pi/6),
+#                           end_y - head_size * math.sin(angle + math.pi/6))
+#                     draw.polygon([(end_x, end_y), p1, p2], fill=arrow_color)
+
+#         # 保存优化后的图像
+#         img.save(f'temp{i}.png')
+
+# def visual(x, mask):
+#     _, _, h, w = x.size()
+#     wsize = 16  # 窗口尺寸
+#     mod_pad_h = (wsize - h % wsize) % wsize
+#     mod_pad_w = (wsize - w % wsize) % wsize
+#     x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), 'reflect')
+
+#     B, C, H, W = x.shape
+#     origin_x = x
+    
+#     # 转换为窗口表示
+#     x = rearrange(x, 'b c (h dh) (w dw) -> b (h w) (dh dw c)', dh=wsize, dw=wsize)
+#     x_input = x
+
+#     for i in range(len(mask)):
+#         [idx1, idx2], offset = mask[i][0], mask[i][1]  # 获取当前步骤的offset
+
+#         # 颜色处理部分保持不变
+#         x1 = batch_index_select(x_input, idx1)
+#         x2 = batch_index_select(x_input, idx2)
+#         x_colored = batch_index_fill(x_input.clone(), x1, x2, idx1, idx2)
+#         x_vis = rearrange(x_colored, 'b (h w) (dh dw c) -> b c (h dh) (w dw)', 
+#                         h=H//wsize, w=W//wsize, dh=wsize, dw=wsize, c=C)
+
+#         # 创建基础图像
+#         img = transforms.ToPILImage()(x_vis.squeeze(0)).convert("RGBA")
+#         draw = ImageDraw.Draw(img)
+
+#         # 优化后的箭头参数
+#         scale_factor = 6.0    # 增大箭头基本长度
+#         base_arrow_size = 2    # 基础箭头尺寸
+#         min_display_length = 2.0  # 最小显示长度（像素）
+#         arrow_color = (255, 0, 0, 220)  # 纯红色箭头
+
+#         # 处理offset张量
+#         offset = F.interpolate(offset, size=(H//wsize, W//wsize), mode='bilinear')
+#         offset_np = offset.squeeze(0).cpu().detach().numpy()
+        
+#         # 获取窗口网格尺寸
+#         num_windows_h = H // wsize
+#         num_windows_w = W // wsize
+
+#         # 遍历每个窗口
+#         for window_y in range(num_windows_h):
+#             for window_x in range(num_windows_w):
+#                 # 计算窗口中心坐标
+#                 center_x = window_x * wsize + wsize//2
+#                 center_y = window_y * wsize + wsize//2
+                
+#                 # 获取对应offset值
+#                 dx = offset_np[0, window_y, window_x] * scale_factor
+#                 dy = offset_np[1, window_y, window_x] * scale_factor
+#                 displacement = math.hypot(dx, dy)
+
+#                 # 过滤微小位移
+#                 if displacement < min_display_length:
+#                     continue
+
+#                 # 动态调整参数
+#                 arrow_size = base_arrow_size + int(displacement * 0.3)
+#                 line_width = 1 + int(displacement * 0.1)
+
+#                 # 计算终点坐标
+#                 end_x = center_x + dx
+#                 end_y = center_y + dy
+
+#                 # 绘制箭头主体
+#                 draw.line([(center_x, center_y), (end_x, end_y)],
+#                          fill=arrow_color, width=line_width)
+
+#                 # 绘制箭头头部
+#                 angle = math.atan2(dy, dx)
+#                 head_size = arrow_size + displacement * 0.3
+#                 p1 = (end_x - head_size * math.cos(angle - math.pi/6),
+#                       end_y - head_size * math.sin(angle - math.pi/6))
+#                 p2 = (end_x - head_size * math.cos(angle + math.pi/6),
+#                       end_y - head_size * math.sin(angle + math.pi/6))
+#                 draw.polygon([(end_x, end_y), p1, p2], fill=arrow_color)
+
+#         # 保存结果
+#         img.save(f'temp{i}.png')
 
 def visual(x, mask):
+    # 输入预处理
     _, _, h, w = x.size()
-    wsize = 16
+    wsize = 64  # 窗口尺寸
     mod_pad_h = (wsize - h % wsize) % wsize
     mod_pad_w = (wsize - w % wsize) % wsize
     x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), 'reflect')
 
     B, C, H, W = x.shape
-    origin_x = x
-    x = rearrange(x, 'b c (h dh) (w dw) -> b (h w) (dh dw c)', dh=wsize, dw=wsize)
-    x_input = x
-
-    # 颜色参数保持不变
-    alpha = 0.5
-    light_red = torch.tensor([1.0, 0.8, 0.8], device=x.device)
-    light_green = torch.tensor([0.8, 1.0, 0.8], device=x.device)
-    window_pixels_red = light_red.repeat(wsize*wsize).view(1, 1, -1)
-    window_pixels_green = light_green.repeat(wsize*wsize).view(1, 1, -1)
+    
+    # 生成基础可视化图像
+    base_img = x.clone()
+    x_vis = torch.clamp(base_img, 0, 1).squeeze(0)  # [C, H, W]
 
     for i in range(len(mask)):
-        idx1, idx2 = mask[i][0]
-        offset = mask[i][1]
-
-        # 颜色处理部分保持不变
-        x1 = batch_index_select(x_input, idx1)
-        x2 = batch_index_select(x_input, idx2)
-        # x1 = x1 * (1 - alpha) + window_pixels_green * alpha
-        # x2 = x2 * (1 - alpha) + window_pixels_red * alpha
-        x_colored = batch_index_fill(x_input.clone(), x1, x2, idx1, idx2)
-        x_vis = rearrange(x_colored, 'b (h w) (dh dw c) -> b c (h dh) (w dw)', 
-                        h=H//wsize, w=W//wsize, dh=wsize, dw=wsize, c=C)
+        # 获取当前步骤的offset
+        _, offset = mask[i][0], mask[i][1]
+        
+        # 调整offset分辨率匹配窗口数量
+        num_windows_h = H // wsize
+        num_windows_w = W // wsize
+        adjusted_offset = F.interpolate(offset, 
+                                     size=(num_windows_h, num_windows_w),
+                                     mode='bilinear',
+                                     align_corners=False)
+        
+        # 转换为numpy数组
+        offset_np = adjusted_offset.squeeze(0).cpu().detach().numpy()  # [2, H//wsize, W//wsize]
 
         # 创建PIL图像
-        img = torch.clamp(x_vis, 0, 1).squeeze(0)
-        img = transforms.ToPILImage()(img).convert("RGBA")
+        img = transforms.ToPILImage()(x_vis).convert("RGBA")
         draw = ImageDraw.Draw(img)
 
-        # ==== 箭头参数优化 ====
-        scale_factor = 2.0    # 缩小箭头长度（原4→2）
-        arrow_size = 2        # 缩小箭头头部（原3→2）
-        stride = 2            # 步长控制密度（每2个窗口绘制一个）
-        min_length = 0.5      # 最小显示长度阈值（单位：像素）
-        max_length = 5       # 最大显示长度阈值（单位：像素）
-        arrow_color = (255, 80, 80, 220)  # 改用橙红色提高对比度
+        # 箭头参数配置
+        scale_factor = 80    # 箭头长度缩放系数
+        min_displacement = 2  # 最小显示位移（像素）
+        arrow_color = (255, 0, 0, 200)  # 红色箭头，透明度200/255
 
-        # 处理offset张量
-        offset_np = offset.squeeze(0).cpu().detach().numpy()
-        _, oh, ow = offset_np.shape
-
-        # 带步长的遍历
-        for y in range(0, oh, stride):
-            for x in range(0, ow, stride):
-                # 计算原始窗口中心坐标
-                center_x = x * (W//ow) + (W//ow)//2
-                center_y = y * (H//oh) + (H//oh)//2
-
-                # 获取当前offset值
-                dx = offset_np[0, y, x] * scale_factor
-                dy = offset_np[1, y, x] * scale_factor
+        # 遍历每个窗口
+        for window_row in range(num_windows_h):
+            for window_col in range(num_windows_w):
+                # 计算窗口中心坐标
+                center_x = window_col * wsize + wsize//2
+                center_y = window_row * wsize + wsize//2
+                
+                # 获取offset值
+                dx = offset_np[0, window_row, window_col] * scale_factor
+                dy = offset_np[1, window_row, window_col] * scale_factor
                 displacement = math.hypot(dx, dy)
 
                 # 过滤微小位移
-                if displacement < min_length or displacement > max_length:
+                if displacement < min_displacement:
                     continue
 
-                # 计算终点坐标
+                # 计算箭头终点
                 end_x = center_x + dx
                 end_y = center_y + dy
 
-                # 动态调整线宽和头部大小
+                # 绘制箭头线
                 line_width = max(1, int(displacement * 0.3))
-                head_size = max(1, int(displacement * 0.5))
+                draw.line([(center_x, center_y), (end_x, end_y)],
+                         fill=arrow_color, 
+                         width=line_width)
 
-                # 绘制箭头主体
-                draw.line([(center_x, center_y), (end_x, end_y)], 
-                         fill=arrow_color, width=line_width)
-
-                # 绘制箭头头部（仅当位移足够大时）
-                if displacement > 2:  # 头部显示阈值
+                # 绘制箭头头部
+                if displacement > 2:
                     angle = math.atan2(dy, dx)
+                    head_size = max(3, int(displacement * 0.6))
                     p1 = (end_x - head_size * math.cos(angle - math.pi/6),
                           end_y - head_size * math.sin(angle - math.pi/6))
                     p2 = (end_x - head_size * math.cos(angle + math.pi/6),
                           end_y - head_size * math.sin(angle + math.pi/6))
                     draw.polygon([(end_x, end_y), p1, p2], fill=arrow_color)
 
-        # 保存优化后的图像
-        img.save(f'temp{i}.png')
+        # 保存结果
+        img.save(f'offset_vis_{i}.png')
 
 
 if __name__ == '__main__':
@@ -569,7 +725,7 @@ if __name__ == '__main__':
     f.eval()
 
     #img = Image.open(r'10.160.15.241C04130-20220511050846_0001.png').convert('RGB')
-    img = Image.open(r'photos/10.240.8.12C00061-20220519063947_0002/10.240.8.12C00061-20220519063947_0002.jpg').convert('RGB')
+    img = Image.open(r'10.240.8.12C00061-20220519063947_0002.jpg').convert('RGB')
 
     
     x = transforms.ToTensor()(img)  
